@@ -118,9 +118,11 @@ Templates.prototype.renderScope = function(result, scope, varscope) {
 Templates.prototype.getVarScope = function(vars) {
   var evals = '';
   for (var v in vars) {
-    evals += 'var ' + v + ' = ' + vars[v] + ';';
+    var value = (typeof vars[v] == 'string') ? 
+                 '"' + vars[v] + '"' :
+                 vars[v];
+    evals += 'var ' + v + ' = ' + value + ';';
   }
-  console.log("eval: " + evals);
   eval(evals);
   
   function varscope(statement) {
@@ -163,8 +165,6 @@ Templates.prototype.compileTemplate = function(name, data) {
     }
   }
   this.templates[name] = tree;
-
-  this.printScope(tree.rootScope, 0);
 };
 
 Templates.prototype.handleCond = function(tree, cond) {
