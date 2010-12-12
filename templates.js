@@ -164,16 +164,22 @@ Templates.prototype.getVarScope = function(_vars) {
   }
   eval(evals);
   
+  var that = this;
   function evaluate(statement) {
     eval('var result = (' + statement + ');');
     return result;
   }
   function extend(_newVars) {
-    return this.getVarScope(_vars.concat(_newVars));
+    for (var i in _vars) {
+      if (!_newVars[i]) {
+        _newVars[i] = _vars[i];
+      }
+    }
+    return that.getVarScope(_newVars);
   }
   return {
     'eval': evaluate,
-    'extend': utils.bind(this, extend)
+    'extend': extend
   };
 };
 
