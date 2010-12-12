@@ -34,6 +34,22 @@ Tree.prototype.addVar = function(v) {
   this.currentScope().push(VarNode(utils.trim(v)));
 };
 
+Tree.prototype.forScope = function(statement) {
+  var index = statement.indexOf(' in ');
+  if (index == -1) {
+    throw 'Must have 'in' keyword in for statement.'
+  }
+  var variable = utils.trim(statement.substr(0, index));
+  var iterable = utils.trim(statement.substr(index + 4));
+  var forNode = ForNode(variable, iterable);
+  this.currentScope().push(forNode);
+  this.scopeStack.push(forNode.scope);
+};
+
+Tree.prototype.extend = function(template) {
+  this.superTemplate = template;
+};
+
 function DataNode(data) {
   return {
     'type': Tree.DATA,
@@ -49,10 +65,19 @@ function CondNode(cond, type) {
   };
 }
 
-function VarNode(v) {
+function VarNode(variable) {
   return {
     'type': Tree.VAR,
-    'variable': v
+    'variable': variable
+  };
+}
+
+function ForNode(variable, iterable) {
+  return {
+    'type': Tree.FOR,
+    'variable': variable,
+    'iterable': iterable,
+    'scope': []
   };
 }
 
@@ -89,10 +114,10 @@ Templates.prototype.renderScope = function(result, scope, varscope) {
         result.output += item.data;
         break;
       case Tree.VAR:
-        result.output += varscope(item.variable);
+        result.output += varscope.eval(item.variable);
         break;
       case Tree.IF:
-        if (varscope(item.cond)) {
+        if (varscope.eval(item.cond)) {
           conditionMet = true;
           this.renderScope(result, item.scope, varscope);
         } else {
@@ -100,7 +125,7 @@ Templates.prototype.renderScope = function(result, scope, varscope) {
         }
         break;
       case Tree.ELSEIF:
-        if (!conditionMet && varscope(item.cond)) {
+        if (!conditionMet && varscope.eval(item.cond)) {
           conditionMet = true;
           this.renderScope(result, item.scope, varscope);
         }
@@ -111,25 +136,45 @@ Templates.prototype.renderScope = function(result, scope, varscope) {
           this.renderScope(result, item.scope, varscope);
         }
         break;
+      case Tree.FOR:
+        this.renderFor(result, item, varscope);
+        break;
     }
   }
 };
 
-Templates.prototype.getVarScope = function(vars) {
+Templates.prototype.renderFor = function(result, forItem, varscope) {
+  var iterable = varscope.eval(forItem.iterable);
+  for (var i = 0, item; item = iterable[i]; ++i) {
+    console.log("Iterating: " + forItem.variable + " = " + item);
+    var forVars = {};
+    forVars[forItem.variable] = item;
+    var newVarscope = varscope.extend(forVars);
+    this.renderScope(result, forItem.scope, newVarscope);
+  }
+};
+
+Templates.prototype.getVarScope = function(_vars) {
   var evals = '';
-  for (var v in vars) {
-    var value = (typeof vars[v] == 'string') ? 
-                 '"' + vars[v] + '"' :
-                 vars[v];
-    evals += 'var ' + v + ' = ' + value + ';';
+  for (var v in _vars) {
+    if (v == '_vars') {
+      throw 'Must not use keyword _vars in template variables.';
+    }
+    evals += 'var ' + v + ' = _vars["' + v + '"];';
   }
   eval(evals);
   
-  function varscope(statement) {
+  function evaluate(statement) {
     eval('var result = (' + statement + ');');
     return result;
   }
-  return varscope;
+  function extend(_newVars) {
+    return this.getVarScope(_vars.concat(_newVars));
+  }
+  return {
+    'eval': evaluate,
+    'extend': utils.bind(this, extend)
+  };
 };
 
 Templates.prototype.compileTemplate = function(name, data) {
@@ -146,7 +191,7 @@ Templates.prototype.compileTemplate = function(name, data) {
                && (condIndex == -1 || varIndex < condIndex)) {
       var closeIndex = data.indexOf('}}', varIndex);
       if (closeIndex == -1) {
-        throw "Opening {{ was not followed by a closing }}.";
+        throw 'Opening {{ was not followed by a closing }}.';
       }
 
       tree.addData(data.substring(index, varIndex));
@@ -156,29 +201,38 @@ Templates.prototype.compileTemplate = function(name, data) {
                && (varIndex == -1 || condIndex < varIndex)) {
       var closeIndex = data.indexOf('%}', condIndex);
       if (closeIndex == -1) {
-        throw "Opening {% was not followed by a closing %}.";
+        throw 'Opening {% was not followed by a closing %}.';
       }
 
       tree.addData(data.substring(index, condIndex));
-      this.handleCond(tree, data.substring(condIndex + 2, closeIndex));
+      this.handleKeyword(tree, data.substring(condIndex + 2, closeIndex));
       index = closeIndex + 2;
     }
   }
   this.templates[name] = tree;
+  
+  this.printScope(tree.rootScope, 0);
 };
 
-Templates.prototype.handleCond = function(tree, cond) {
-  cond = utils.trim(cond);
-  if (cond.substr(0, 2) == 'if') {
-    tree.addScope(cond.substr(2), Tree.IF);
-  } else if (cond.substr(0, 7) == 'else if') {
+Templates.prototype.handleKeyword = function(tree, keyword) {
+  keyword = utils.trim(keyword);
+  console.log(keyword);
+  if (keyword.substr(0, 2) == 'if') {
+    tree.addScope(keyword.substr(2), Tree.IF);
+  } else if (keyword.substr(0, 7) == 'else if') {
     tree.upScope();
-    tree.addScope(cond.substr(7), Tree.ELSEIF);
-  } else if (cond.substr(0, 4) == 'else') {
+    tree.addScope(keyword.substr(7), Tree.ELSEIF);
+  } else if (keyword.substr(0, 4) == 'else') {
     tree.upScope();
     tree.addScope('', Tree.ELSE);
-  } else if (cond == 'endif') {
+  } else if (keyword == 'endif') {
     tree.upScope();
+  } else if (keyword.substr(0, 3) == 'for') {
+    tree.forScope(keyword.substr(3));
+  } else if (keyword.substr(0, 6) == 'endfor') {
+    tree.upScope();
+  } else if (keyword.substr(0, 7) == 'extends') {
+    tree.extend(keyword.substr(7));
   }
 };
 
