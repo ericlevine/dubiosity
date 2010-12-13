@@ -9,6 +9,7 @@ function Tree() {
   this.blocks = {};
   this.subtemplate = false;
   this.pending = false;
+  this.compiled = false;
 }
 
 Tree.DATA = 0;
@@ -79,7 +80,9 @@ Tree.prototype.extend = function(name, templates, callback) {
     templates.loadTemplate(name, utils.bind(this, function(template) {
       this.extendTemplate(template);
       this.pending = false;
-      callback(this);
+      if (this.compiled) {
+        callback(this);
+      }
     }));
   }
 };
@@ -188,6 +191,7 @@ Templates.prototype.compileTemplate = function(name, data, callback) {
   this.templates[name] = tree;
   
   this.printScope(tree.rootScope, 0);
+  tree.compiled = true;
   return tree;
 };
 
