@@ -7,6 +7,8 @@ function Tree() {
   this.rootScope = [];
   this.scopeStack = [this.rootScope];
   this.blocks = {};
+  this.subtemplate = false;
+  this.pending = false;
 }
 
 Tree.DATA = 0;
@@ -67,14 +69,17 @@ Tree.prototype.addScopeNode = function(node) {
   }
 };
 
-Tree.prototype.extend = function(name, templates) {
+Tree.prototype.extend = function(name, templates, callback) {
   name = utils.trim(name);
   var template = templates.templates[name];
   if (template) {
     this.extendTemplate(template);
   } else {
+    this.pending = true;
     templates.loadTemplate(name, utils.bind(this, function(template) {
       this.extendTemplate(template);
+      this.pending = false;
+      callback(this);
     }));
   }
 };
@@ -82,6 +87,11 @@ Tree.prototype.extend = function(name, templates) {
 Tree.prototype.extendTemplate = function(template) {
   this.rootScope = template.rootScope;
   this.subtemplate = true;
+  for (var b in template.blocks) {
+    if (!this.blocks[b]) {
+      this.blocks[b] = template.blocks[b];
+    }
+  }
 };
 
 function DataNode(data) {
@@ -134,11 +144,14 @@ Templates.prototype.loadTemplate = function(name, callback) {
   fs.readFile(this.directory + '/' + name,
               utils.bind(this, function(err, data) {
     if (err) throw err;
-    callback(this.compileTemplate(name, data.toString()));
+    var template = this.compileTemplate(name, data.toString(), callback);
+    if (!template.pending) {
+      callback(template);
+    }
   }));
 };
 
-Templates.prototype.compileTemplate = function(name, data) {
+Templates.prototype.compileTemplate = function(name, data, callback) {
   var index = 0;
   var tree = new Tree();
   while (true) {
@@ -166,7 +179,9 @@ Templates.prototype.compileTemplate = function(name, data) {
       }
 
       tree.addData(data.substring(index, condIndex));
-      this.handleKeyword(tree, data.substring(condIndex + 2, closeIndex));
+      this.handleKeyword(tree,
+                         data.substring(condIndex + 2, closeIndex),
+                         callback);
       index = closeIndex + 2;
     }
   }
@@ -176,9 +191,8 @@ Templates.prototype.compileTemplate = function(name, data) {
   return tree;
 };
 
-Templates.prototype.handleKeyword = function(tree, keyword) {
+Templates.prototype.handleKeyword = function(tree, keyword, callback) {
   keyword = utils.trim(keyword);
-  console.log(keyword);
   if (keyword.substr(0, 2) == 'if') {
     tree.addScope(keyword.substr(2), Tree.IF);
   } else if (keyword.substr(0, 7) == 'else if') {
@@ -198,7 +212,7 @@ Templates.prototype.handleKeyword = function(tree, keyword) {
   } else if (keyword.substr(0, 8) == 'endblock') {
     tree.upScope();
   } else if (keyword.substr(0, 7) == 'extends') {
-    tree.extend(keyword.substr(7), this);
+    tree.extend(keyword.substr(7), this, callback);
   }
 };
 
@@ -268,7 +282,6 @@ Templates.prototype.renderScope = function(result, scope, varscope, template) {
 Templates.prototype.renderFor = function(result, forItem, varscope, template) {
   var iterable = varscope.eval(forItem.iterable);
   for (var i = 0, item; item = iterable[i]; ++i) {
-    console.log("Iterating: " + forItem.variable + " = " + item);
     var forVars = {};
     forVars[forItem.variable] = item;
     var newVarscope = varscope.extend(forVars);
