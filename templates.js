@@ -1,9 +1,12 @@
 var fs = require('fs');
 var utils = require('./utils');
 
+/* Compiled template structure. */
+
 function Tree() {
   this.rootScope = [];
   this.scopeStack = [this.rootScope];
+  this.blocks = {};
 }
 
 Tree.DATA = 0;
@@ -11,6 +14,7 @@ Tree.VAR = 1;
 Tree.IF = 2;
 Tree.ELSEIF = 3;
 Tree.ELSE = 4;
+Tree.BLOCK = 5;
 
 Tree.prototype.currentScope = function() {
   return this.scopeStack[this.scopeStack.length - 1];
@@ -18,8 +22,7 @@ Tree.prototype.currentScope = function() {
 
 Tree.prototype.addScope = function(cond, type) {
   var condNode = CondNode(utils.trim(cond), type);
-  this.currentScope().push(condNode);
-  this.scopeStack.push(condNode.scope);
+  this.addScopeNode(condNode);
 };
 
 Tree.prototype.upScope = function() {
@@ -27,11 +30,11 @@ Tree.prototype.upScope = function() {
 };
 
 Tree.prototype.addData = function(data) {
-  this.currentScope().push(DataNode(data));
+  this.addNode(DataNode(data));
 };
 
 Tree.prototype.addVar = function(v) {
-  this.currentScope().push(VarNode(utils.trim(v)));
+  this.addNode(VarNode(utils.trim(v)));
 };
 
 Tree.prototype.forScope = function(statement) {
@@ -42,12 +45,43 @@ Tree.prototype.forScope = function(statement) {
   var variable = utils.trim(statement.substr(0, index));
   var iterable = utils.trim(statement.substr(index + 4));
   var forNode = ForNode(variable, iterable);
-  this.currentScope().push(forNode);
-  this.scopeStack.push(forNode.scope);
+  this.addScopeNode(forNode);
 };
 
-Tree.prototype.extend = function(template) {
-  this.superTemplate = template;
+Tree.prototype.addBlock = function(name) {
+  var blockNode = BlockNode(utils.trim(name));
+  this.blocks[blockNode.name] = blockNode;
+  this.addScopeNode(blockNode);
+};
+
+Tree.prototype.addNode = function(node) {
+  if (!this.subtemplate) {
+    this.currentScope().push(node);
+  }
+};
+
+Tree.prototype.addScopeNode = function(node) {
+  if (!this.subtemplate) {
+    this.currentScope().push(node);
+    this.scopeStack.push(node.scope);
+  }
+};
+
+Tree.prototype.extend = function(name, templates) {
+  name = utils.trim(name);
+  var template = templates.templates[name];
+  if (template) {
+    this.extendTemplate(template);
+  } else {
+    templates.loadTemplate(name, utils.bind(this, function(template) {
+      this.extendTemplate(template);
+    }));
+  }
+};
+
+Tree.prototype.extendTemplate = function(template) {
+  this.rootScope = template.rootScope;
+  this.subtemplate = true;
 };
 
 function DataNode(data) {
@@ -81,106 +115,27 @@ function ForNode(variable, iterable) {
   };
 }
 
+function BlockNode(name) {
+  return {
+    'type': Tree.BLOCK,
+    'name': name,
+    'scope': []
+  };
+}
+
 function Templates(directory) {
   this.directory = directory;
   this.templates = {};
 }
 
-Templates.prototype.render = function(name, vars, callback) {
-  var result;
-  if (this.templates[name]) {
-    callback(this.renderTemplate(this.templates[name], vars));
-  } else {
-    fs.readFile(this.directory + '/' + name,
-                utils.bind(this, function(err, data) {
-      if (err) throw err;
-      this.compileTemplate(name, data.toString());
-      callback(this.renderTemplate(this.templates[name], vars));
-    }));
-  }
-};
+/* Template compilation methods. */
 
-Templates.prototype.renderTemplate = function(template, vars) {
-  var result = {'output': ''};
-  this.renderScope(result, template.rootScope, this.getVarScope(vars));
-  return result;
-};
-
-Templates.prototype.renderScope = function(result, scope, varscope) {
-  var conditionMet = true;
-  for (var i = 0, item; item = scope[i]; ++i) {
-    switch (item.type) {
-      case Tree.DATA:
-        result.output += item.data;
-        break;
-      case Tree.VAR:
-        result.output += varscope.eval(item.variable);
-        break;
-      case Tree.IF:
-        if (varscope.eval(item.cond)) {
-          conditionMet = true;
-          this.renderScope(result, item.scope, varscope);
-        } else {
-          conditionMet = false;
-        }
-        break;
-      case Tree.ELSEIF:
-        if (!conditionMet && varscope.eval(item.cond)) {
-          conditionMet = true;
-          this.renderScope(result, item.scope, varscope);
-        }
-        break;
-      case Tree.ELSE:
-        if (!conditionMet) {
-          conditionMet = true;
-          this.renderScope(result, item.scope, varscope);
-        }
-        break;
-      case Tree.FOR:
-        this.renderFor(result, item, varscope);
-        break;
-    }
-  }
-};
-
-Templates.prototype.renderFor = function(result, forItem, varscope) {
-  var iterable = varscope.eval(forItem.iterable);
-  for (var i = 0, item; item = iterable[i]; ++i) {
-    console.log("Iterating: " + forItem.variable + " = " + item);
-    var forVars = {};
-    forVars[forItem.variable] = item;
-    var newVarscope = varscope.extend(forVars);
-    this.renderScope(result, forItem.scope, newVarscope);
-  }
-};
-
-Templates.prototype.getVarScope = function(_vars) {
-  var evals = '';
-  for (var v in _vars) {
-    if (v == '_vars') {
-      throw 'Must not use keyword _vars in template variables.';
-    }
-    evals += 'var ' + v + ' = _vars["' + v + '"];';
-  }
-  eval(evals);
-  
-  var that = this;
-  function evaluate(statement) {
-    eval('var result = (' + statement + ');');
-    return result;
-  }
-  function extend(_newVars) {
-    for (var i in _vars) {
-      if (!_newVars[i]) {
-        _newVars[i] = _vars[i];
-      }
-    }
-    return that.getVarScope(_newVars);
-  }
-  return {
-    'eval': evaluate,
-    'extend': extend
-  };
+Templates.prototype.loadTemplate = function(name, callback) {
+  fs.readFile(this.directory + '/' + name,
+              utils.bind(this, function(err, data) {
+    if (err) throw err;
+    callback(this.compileTemplate(name, data.toString()));
+  }));
 };
 
 Templates.prototype.compileTemplate = function(name, data) {
@@ -218,6 +173,7 @@ Templates.prototype.compileTemplate = function(name, data) {
   this.templates[name] = tree;
   
   this.printScope(tree.rootScope, 0);
+  return tree;
 };
 
 Templates.prototype.handleKeyword = function(tree, keyword) {
@@ -237,10 +193,119 @@ Templates.prototype.handleKeyword = function(tree, keyword) {
     tree.forScope(keyword.substr(3));
   } else if (keyword.substr(0, 6) == 'endfor') {
     tree.upScope();
+  } else if (keyword.substr(0, 5) == 'block') {
+    tree.addBlock(keyword.substr(5));
+  } else if (keyword.substr(0, 8) == 'endblock') {
+    tree.upScope();
   } else if (keyword.substr(0, 7) == 'extends') {
-    tree.extend(keyword.substr(7));
+    tree.extend(keyword.substr(7), this);
   }
 };
+
+/* Template rendering methods. */
+
+Templates.prototype.render = function(name, vars, callback) {
+  var template = this.templates[name];
+  if (template) {
+    callback(this.renderTemplate(template, vars));
+  } else {
+    this.loadTemplate(name, utils.bind(this, function(template) {
+      callback(this.renderTemplate(template, vars));
+    }));
+  }
+};
+
+Templates.prototype.renderTemplate = function(template, vars) {
+  var result = {'output': ''};
+  this.renderScope(result,
+                   template.rootScope,
+                   this.getVarScope(vars),
+                   template);
+  return result;
+};
+
+Templates.prototype.renderScope = function(result, scope, varscope, template) {
+  var conditionMet = true;
+  for (var i = 0, item; item = scope[i]; ++i) {
+    switch (item.type) {
+      case Tree.DATA:
+        result.output += item.data;
+        break;
+      case Tree.VAR:
+        result.output += varscope.eval(item.variable);
+        break;
+      case Tree.IF:
+        if (varscope.eval(item.cond)) {
+          conditionMet = true;
+          this.renderScope(result, item.scope, varscope, template);
+        } else {
+          conditionMet = false;
+        }
+        break;
+      case Tree.ELSEIF:
+        if (!conditionMet && varscope.eval(item.cond)) {
+          conditionMet = true;
+          this.renderScope(result, item.scope, varscope, template);
+        }
+        break;
+      case Tree.ELSE:
+        if (!conditionMet) {
+          conditionMet = true;
+          this.renderScope(result, item.scope, varscope, template);
+        }
+        break;
+      case Tree.FOR:
+        this.renderFor(result, item, varscope, template);
+        break;
+      case Tree.BLOCK:
+        var blockScope = template.blocks[item.name].scope;
+        this.renderScope(result, blockScope, varscope, template);
+        break;
+    }
+  }
+};
+
+Templates.prototype.renderFor = function(result, forItem, varscope, template) {
+  var iterable = varscope.eval(forItem.iterable);
+  for (var i = 0, item; item = iterable[i]; ++i) {
+    console.log("Iterating: " + forItem.variable + " = " + item);
+    var forVars = {};
+    forVars[forItem.variable] = item;
+    var newVarscope = varscope.extend(forVars);
+    this.renderScope(result, forItem.scope, newVarscope, template);
+  }
+};
+
+Templates.prototype.getVarScope = function(_vars) {
+  var evals = '';
+  for (var v in _vars) {
+    if (v == '_vars') {
+      throw 'Must not use keyword _vars in template variables.';
+    }
+    evals += 'var ' + v + ' = _vars["' + v + '"];';
+  }
+  eval(evals);
+  
+  var that = this;
+  function evaluate(statement) {
+    eval('var result = (' + statement + ');');
+    return result;
+  }
+  function extend(_newVars) {
+    for (var i in _vars) {
+      if (!_newVars[i]) {
+        _newVars[i] = _vars[i];
+      }
+    }
+    return that.getVarScope(_newVars);
+  }
+  return {
+    'eval': evaluate,
+    'extend': extend
+  };
+};
+
+/* Debugging methods. */
 
 Templates.prototype.printScope = function(scope, tab) {
   for (var i = 0, item; item = scope[i]; ++i) {
@@ -265,6 +330,15 @@ Templates.prototype.printScope = function(scope, tab) {
         break;
       case Tree.ELSE:
         console.log(tabStr + 'ELSE:' + item.cond);
+        this.printScope(item.scope, tab + 2);
+        break;
+      case Tree.FOR:
+        console.log(tabStr + 'FOR: ' + item.variable + ' in ' +
+                    item.iterable);
+        this.printScope(item.scope, tab + 2);
+        break;
+      case Tree.BLOCK:
+        console.log(tabStr + 'BLOCK ' + item.name + ':');
         this.printScope(item.scope, tab + 2);
         break;
     }
