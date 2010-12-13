@@ -3,13 +3,18 @@ var utils = require('./utils');
 
 /* Compiled template structure. */
 
+/**
+ * The template data structure, which is modeled as a tree of nodes. The
+ * templates are parsed into this format and cached for future use.
+ */
 function Tree() {
   this.rootScope = [];
   this.scopeStack = [this.rootScope];
   this.blocks = {};
   this.subtemplate = false;
-  this.pending = false;
   this.compiled = false;
+  this.callbacks = [];
+  this.pending = 1;
 }
 
 Tree.DATA = 0;
@@ -19,27 +24,67 @@ Tree.ELSEIF = 3;
 Tree.ELSE = 4;
 Tree.BLOCK = 5;
 
+Tree.prototype.addCallback = function(fn) {
+  if (this.compiled) {
+    fn(this);
+  } else {
+    this.callbacks.push(fn);
+  }
+};
+
+Tree.prototype.executeCallbacks = function() {
+  for (var i = 0, callback; callback = this.callbacks[i]; ++i) {
+    callback(this);
+  }
+};
+
+Tree.prototype.countdown = function() {
+  this.pending -= 1;
+  if (this.pending == 0) {
+    this.compiled = true;
+    this.executeCallbacks();
+  }
+};
+
+/**
+ * Retrieves the currently active scope in the tree during compilation.
+ */
 Tree.prototype.currentScope = function() {
   return this.scopeStack[this.scopeStack.length - 1];
 };
 
+/**
+ * Creates a new conditional scope and pushes into it.
+ */
 Tree.prototype.addScope = function(cond, type) {
   var condNode = CondNode(utils.trim(cond), type);
   this.addScopeNode(condNode);
 };
 
+/**
+ * Pops the top (current) scope off the stack.
+ */
 Tree.prototype.upScope = function() {
   this.scopeStack.pop();
 };
 
+/**
+ * Creates a dumb data node and pushes it into the current scope.
+ */
 Tree.prototype.addData = function(data) {
   this.addNode(DataNode(data));
 };
 
+/**
+ * Creates a variable node and pushes it into the current scope.
+ */
 Tree.prototype.addVar = function(v) {
   this.addNode(VarNode(utils.trim(v)));
 };
 
+/**
+ * Creates a for-loop scope and pushes it to the top of the scope stack.
+ */
 Tree.prototype.forScope = function(statement) {
   var index = statement.indexOf(' in ');
   if (index == -1) {
@@ -51,18 +96,27 @@ Tree.prototype.forScope = function(statement) {
   this.addScopeNode(forNode);
 };
 
+/**
+ * Creates a block scope and pushes it to the top of the scope stack.
+ */
 Tree.prototype.addBlock = function(name) {
   var blockNode = BlockNode(utils.trim(name));
   this.blocks[blockNode.name] = blockNode;
   this.addScopeNode(blockNode);
 };
 
+/**
+ * Adds a node to the current scope.
+ */
 Tree.prototype.addNode = function(node) {
   if (!this.subtemplate) {
     this.currentScope().push(node);
   }
 };
 
+/**
+ * Adds a scope node, and pushes it to the top of the scope stack.
+ */
 Tree.prototype.addScopeNode = function(node) {
   if (!this.subtemplate) {
     this.currentScope().push(node);
@@ -70,21 +124,18 @@ Tree.prototype.addScopeNode = function(node) {
   }
 };
 
-Tree.prototype.extend = function(name, templates, callback) {
+/**
+ * Extends the current template by incrementing the pending operations
+ * counter (the extension must occur before compilation is complete) and
+ * assigning a callback to the given template.
+ */
+Tree.prototype.extend = function(name, templates) {
   name = utils.trim(name);
-  var template = templates.templates[name];
-  if (template) {
+  this.pending += 1;
+  templates.getTemplate(name, utils.bind(this, function(template) {
     this.extendTemplate(template);
-  } else {
-    this.pending = true;
-    templates.loadTemplate(name, utils.bind(this, function(template) {
-      this.extendTemplate(template);
-      this.pending = false;
-      if (this.compiled) {
-        callback(this);
-      }
-    }));
-  }
+    this.countdown();
+  }));
 };
 
 Tree.prototype.extendTemplate = function(template) {
@@ -143,20 +194,27 @@ function Templates(directory) {
 
 /* Template compilation methods. */
 
-Templates.prototype.loadTemplate = function(name, callback) {
+Templates.prototype.getTemplate = function(name, callback) {
+  if (this.templates[name]) {
+    this.templates[name].addCallback(callback);
+  } else {
+    var tree = new Tree();
+    this.templates[name] = tree;
+    tree.addCallback(callback);
+    this.loadTemplate(name, tree);
+  }
+};
+
+Templates.prototype.loadTemplate = function(name, tree) {
   fs.readFile(this.directory + '/' + name,
               utils.bind(this, function(err, data) {
     if (err) throw err;
-    var template = this.compileTemplate(name, data.toString(), callback);
-    if (!template.pending) {
-      callback(template);
-    }
+    this.compileTemplate(tree, data.toString());
   }));
 };
 
-Templates.prototype.compileTemplate = function(name, data, callback) {
+Templates.prototype.compileTemplate = function(tree, data) {
   var index = 0;
-  var tree = new Tree();
   while (true) {
     var varIndex = data.indexOf('{{', index);
     var condIndex = data.indexOf('{%', index);
@@ -182,20 +240,16 @@ Templates.prototype.compileTemplate = function(name, data, callback) {
       }
 
       tree.addData(data.substring(index, condIndex));
-      this.handleKeyword(tree,
-                         data.substring(condIndex + 2, closeIndex),
-                         callback);
+      this.handleKeyword(tree, data.substring(condIndex + 2, closeIndex));
       index = closeIndex + 2;
     }
   }
-  this.templates[name] = tree;
+  tree.countdown();
   
-  this.printScope(tree.rootScope, 0);
-  tree.compiled = true;
-  return tree;
+  this.printScope(tree, tree.rootScope, 0);
 };
 
-Templates.prototype.handleKeyword = function(tree, keyword, callback) {
+Templates.prototype.handleKeyword = function(tree, keyword) {
   keyword = utils.trim(keyword);
   if (keyword.substr(0, 2) == 'if') {
     tree.addScope(keyword.substr(2), Tree.IF);
@@ -216,21 +270,16 @@ Templates.prototype.handleKeyword = function(tree, keyword, callback) {
   } else if (keyword.substr(0, 8) == 'endblock') {
     tree.upScope();
   } else if (keyword.substr(0, 7) == 'extends') {
-    tree.extend(keyword.substr(7), this, callback);
+    tree.extend(keyword.substr(7), this);
   }
 };
 
 /* Template rendering methods. */
 
 Templates.prototype.render = function(name, vars, callback) {
-  var template = this.templates[name];
-  if (template) {
+  this.getTemplate(name, utils.bind(this, function(template) {
     callback(this.renderTemplate(template, vars));
-  } else {
-    this.loadTemplate(name, utils.bind(this, function(template) {
-      callback(this.renderTemplate(template, vars));
-    }));
-  }
+  }));
 };
 
 Templates.prototype.renderTemplate = function(template, vars) {
@@ -324,7 +373,7 @@ Templates.prototype.getVarScope = function(_vars) {
 
 /* Debugging methods. */
 
-Templates.prototype.printScope = function(scope, tab) {
+Templates.prototype.printScope = function(tree, scope, tab) {
   for (var i = 0, item; item = scope[i]; ++i) {
     var tabStr = '';
     for (var t = 0; t < tab; ++t) {
@@ -339,24 +388,24 @@ Templates.prototype.printScope = function(scope, tab) {
         break;
       case Tree.IF:
         console.log(tabStr + 'IF:' + item.cond);
-        this.printScope(item.scope, tab + 2);
+        this.printScope(tree, item.scope, tab + 2);
         break;
       case Tree.ELSEIF:
         console.log(tabStr + 'ELSEIF:' + item.cond);
-        this.printScope(item.scope, tab + 2);
+        this.printScope(tree, item.scope, tab + 2);
         break;
       case Tree.ELSE:
         console.log(tabStr + 'ELSE:' + item.cond);
-        this.printScope(item.scope, tab + 2);
+        this.printScope(tree, item.scope, tab + 2);
         break;
       case Tree.FOR:
         console.log(tabStr + 'FOR: ' + item.variable + ' in ' +
                     item.iterable);
-        this.printScope(item.scope, tab + 2);
+        this.printScope(tree, item.scope, tab + 2);
         break;
       case Tree.BLOCK:
         console.log(tabStr + 'BLOCK ' + item.name + ':');
-        this.printScope(item.scope, tab + 2);
+        this.printScope(tree, tree.blocks[item.name].scope, tab + 2);
         break;
     }
   }
