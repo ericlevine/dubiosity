@@ -138,6 +138,11 @@ Tree.prototype.extend = function(name, templates) {
   }));
 };
 
+/**
+ * Extends the template once the supertemplate has loaded by replacing
+ * the rootScope with that of the supertemplate and by inheriting any
+ * blocks of the supertemplate.
+ */
 Tree.prototype.extendTemplate = function(template) {
   this.rootScope = template.rootScope;
   this.subtemplate = true;
@@ -148,6 +153,10 @@ Tree.prototype.extendTemplate = function(template) {
   }
 };
 
+/**
+ * Data node, which is always displayed if the containing scope is
+ * displayed.
+ */
 function DataNode(data) {
   return {
     'type': Tree.DATA,
@@ -155,6 +164,10 @@ function DataNode(data) {
   };
 }
 
+/**
+ * Conditional node, which, based on the type, is displayed if the
+ * condition is evaluated to be true.
+ */
 function CondNode(cond, type) {
   return {
     'type': type,
@@ -163,6 +176,10 @@ function CondNode(cond, type) {
   };
 }
 
+/**
+ * Variable node, which outputs the result of whatever expression is
+ * contained.
+ */
 function VarNode(variable) {
   return {
     'type': Tree.VAR,
@@ -170,6 +187,10 @@ function VarNode(variable) {
   };
 }
 
+/**
+ * For-loop node, which populates the environment with the variable which
+ * is assigned, one at a time, the value in the iterable.
+ */
 function ForNode(variable, iterable) {
   return {
     'type': Tree.FOR,
@@ -179,6 +200,10 @@ function ForNode(variable, iterable) {
   };
 }
 
+/**
+ * Block node, which is used to overwrite sections of text in the
+ * supertemplate, if any.
+ */
 function BlockNode(name) {
   return {
     'type': Tree.BLOCK,
@@ -187,6 +212,10 @@ function BlockNode(name) {
   };
 }
 
+/**
+ * The template object which specifies a directory and maintains a
+ * dictionary of templates indexed by name.
+ */
 function Templates(directory) {
   this.directory = directory;
   this.templates = {};
@@ -194,6 +223,10 @@ function Templates(directory) {
 
 /* Template compilation methods. */
 
+/**
+ * Gets a specified template by assigning a callback to that template
+ * for whenever the given template has successfully compiled.
+ */
 Templates.prototype.getTemplate = function(name, callback) {
   if (this.templates[name]) {
     this.templates[name].addCallback(callback);
@@ -205,6 +238,10 @@ Templates.prototype.getTemplate = function(name, callback) {
   }
 };
 
+/**
+ * Reads a given template from the file system, injecting the template
+ * definition into the provided tree object.
+ */
 Templates.prototype.loadTemplate = function(name, tree) {
   fs.readFile(this.directory + '/' + name,
               utils.bind(this, function(err, data) {
@@ -213,6 +250,10 @@ Templates.prototype.loadTemplate = function(name, tree) {
   }));
 };
 
+/**
+ * Parses a given template file into the tree structure used to evaluate
+ * the template.
+ */
 Templates.prototype.compileTemplate = function(tree, data) {
   var index = 0;
   while (true) {
@@ -245,10 +286,11 @@ Templates.prototype.compileTemplate = function(tree, data) {
     }
   }
   tree.countdown();
-  
-  this.printScope(tree, tree.rootScope, 0);
 };
 
+/**
+ * Parses a given keyword and inserts it into the tree as appropriate.
+ */
 Templates.prototype.handleKeyword = function(tree, keyword) {
   keyword = utils.trim(keyword);
   if (keyword.substr(0, 2) == 'if') {
@@ -276,12 +318,19 @@ Templates.prototype.handleKeyword = function(tree, keyword) {
 
 /* Template rendering methods. */
 
+/**
+ * Renders a given template with the provided variables, and calls
+ * the given callback with the rendered response.
+ */
 Templates.prototype.render = function(name, vars, callback) {
   this.getTemplate(name, utils.bind(this, function(template) {
     callback(this.renderTemplate(template, vars));
   }));
 };
 
+/**
+ * Renders the loaded template with the given variables.
+ */
 Templates.prototype.renderTemplate = function(template, vars) {
   var result = {'output': ''};
   this.renderScope(result,
@@ -291,6 +340,10 @@ Templates.prototype.renderTemplate = function(template, vars) {
   return result;
 };
 
+/**
+ * Renders a scope with a given variable scope and inserts the results
+ * into the given results object.
+ */
 Templates.prototype.renderScope = function(result, scope, varscope, template) {
   var conditionMet = true;
   for (var i = 0, item; item = scope[i]; ++i) {
