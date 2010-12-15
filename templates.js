@@ -419,8 +419,12 @@ Templates.prototype.getVarScope = function(_vars) {
   
   var that = this;
   function evaluate(statement) {
-    eval('var result = (' + statement + ');');
-    return result;
+    try {
+      eval('var result = (' + statement + ');');
+      return result;
+    } catch (e) {
+      return undefined;
+    }
   }
   function extend(_newVars) {
     for (var i in _vars) {
