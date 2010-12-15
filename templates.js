@@ -7,14 +7,15 @@ var utils = require('./utils');
  * The template data structure, which is modeled as a tree of nodes. The
  * templates are parsed into this format and cached for future use.
  */
-function Tree() {
+function Tree(name) {
   this.rootScope = [];
   this.scopeStack = [this.rootScope];
   this.blocks = {};
-  this.subtemplate = false;
+  this.supertemplate = null;
   this.compiled = false;
   this.callbacks = [];
   this.pending = 1;
+  this.name = name;
 }
 
 Tree.DATA = 0;
@@ -28,7 +29,7 @@ Tree.prototype.addCallback = function(fn) {
   if (this.compiled) {
     fn(this);
   } else {
-    this.callbacks.push(fn);
+    this.callbacks.unshift(fn);
   }
 };
 
@@ -109,19 +110,15 @@ Tree.prototype.addBlock = function(name) {
  * Adds a node to the current scope.
  */
 Tree.prototype.addNode = function(node) {
-  if (!this.subtemplate) {
-    this.currentScope().push(node);
-  }
+  this.currentScope().push(node);
 };
 
 /**
  * Adds a scope node, and pushes it to the top of the scope stack.
  */
 Tree.prototype.addScopeNode = function(node) {
-  if (!this.subtemplate) {
-    this.currentScope().push(node);
-    this.scopeStack.push(node.scope);
-  }
+  this.currentScope().push(node);
+  this.scopeStack.push(node.scope);
 };
 
 /**
@@ -144,13 +141,28 @@ Tree.prototype.extend = function(name, templates) {
  * blocks of the supertemplate.
  */
 Tree.prototype.extendTemplate = function(template) {
-  this.rootScope = template.rootScope;
-  this.subtemplate = true;
-  for (var b in template.blocks) {
-    if (!this.blocks[b]) {
-      this.blocks[b] = template.blocks[b];
-    }
+  this.supertemplate = template;
+};
+
+/**
+ * Gets the block with a given name, traversing up the supertemplates if
+ * it isn't found in the current template. Returns null if it cannot
+ * find the superblock.
+ */
+Tree.prototype.getBlock = function(blockName) {
+  if (this.blocks[blockName]) {
+    return this.blocks[blockName];
+  } else if (this.supertemplate) {
+    return this.supertemplate.getBlock(blockName);
   }
+  return null;
+};
+
+Tree.prototype.getRootScope = function() {
+  if (this.supertemplate) {
+    return this.supertemplate.getRootScope();
+  }
+  return this.rootScope;
 };
 
 /**
@@ -231,7 +243,7 @@ Templates.prototype.getTemplate = function(name, callback) {
   if (this.templates[name]) {
     this.templates[name].addCallback(callback);
   } else {
-    var tree = new Tree();
+    var tree = new Tree(name);
     this.templates[name] = tree;
     tree.addCallback(callback);
     this.loadTemplate(name, tree);
@@ -334,7 +346,7 @@ Templates.prototype.render = function(name, vars, callback) {
 Templates.prototype.renderTemplate = function(template, vars) {
   var result = {'output': ''};
   this.renderScope(result,
-                   template.rootScope,
+                   template.getRootScope(),
                    this.getVarScope(vars),
                    template);
   return result;
@@ -378,7 +390,7 @@ Templates.prototype.renderScope = function(result, scope, varscope, template) {
         this.renderFor(result, item, varscope, template);
         break;
       case Tree.BLOCK:
-        var blockScope = template.blocks[item.name].scope;
+        var blockScope = template.getBlock(item.name).scope;
         this.renderScope(result, blockScope, varscope, template);
         break;
     }
@@ -426,7 +438,7 @@ Templates.prototype.getVarScope = function(_vars) {
 
 /* Debugging methods. */
 
-Templates.prototype.printScope = function(tree, scope, tab) {
+Tree.prototype.printScope = function(scope, tab) {
   for (var i = 0, item; item = scope[i]; ++i) {
     var tabStr = '';
     for (var t = 0; t < tab; ++t) {
@@ -441,24 +453,24 @@ Templates.prototype.printScope = function(tree, scope, tab) {
         break;
       case Tree.IF:
         console.log(tabStr + 'IF:' + item.cond);
-        this.printScope(tree, item.scope, tab + 2);
+        this.printScope(item.scope, tab + 2);
         break;
       case Tree.ELSEIF:
         console.log(tabStr + 'ELSEIF:' + item.cond);
-        this.printScope(tree, item.scope, tab + 2);
+        this.printScope(item.scope, tab + 2);
         break;
       case Tree.ELSE:
         console.log(tabStr + 'ELSE:' + item.cond);
-        this.printScope(tree, item.scope, tab + 2);
+        this.printScope(item.scope, tab + 2);
         break;
       case Tree.FOR:
         console.log(tabStr + 'FOR: ' + item.variable + ' in ' +
                     item.iterable);
-        this.printScope(tree, item.scope, tab + 2);
+        this.printScope(item.scope, tab + 2);
         break;
       case Tree.BLOCK:
         console.log(tabStr + 'BLOCK ' + item.name + ':');
-        this.printScope(tree, tree.blocks[item.name].scope, tab + 2);
+        this.printScope(this.getBlock(item.name).scope, tab + 2);
         break;
     }
   }
