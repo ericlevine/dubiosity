@@ -51,11 +51,12 @@ Tree.prototype.countdown = function() {
 };
 
 Tree.prototype.bind = function(scope, callback) {
-  this.countup();
+  var _this = this;
+  _this.countup();
   callback = callback || scope;
   return function() {
     callback.apply(scope, arguments);
-    this.countdown();
+    _this.countdown();
   };
 };
 
