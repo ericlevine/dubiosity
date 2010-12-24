@@ -50,6 +50,15 @@ Tree.prototype.countdown = function() {
   }
 };
 
+Tree.prototype.bind = function(scope, callback) {
+  this.countup();
+  callback = callback || scope;
+  return function() {
+    callback.apply(scope, arguments);
+    this.countdown();
+  };
+};
+
 /**
  * Retrieves the currently active scope in the tree during compilation.
  */
