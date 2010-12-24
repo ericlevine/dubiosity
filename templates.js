@@ -7,14 +7,13 @@ var utils = require('./utils');
  * The template data structure, which is modeled as a tree of nodes. The
  * templates are parsed into this format and cached for future use.
  */
-function Tree(name) {
+function Tree(name, pending) {
   this.rootScope = [];
   this.scopeStack = [this.rootScope];
   this.blocks = {};
   this.supertemplate = null;
-  this.compiled = false;
   this.callbacks = [];
-  this.pending = 1;
+  this.pending = pending ? 2 : 1;
   this.name = name;
 }
 
@@ -26,7 +25,7 @@ Tree.ELSE = 4;
 Tree.BLOCK = 5;
 
 Tree.prototype.addCallback = function(fn) {
-  if (this.compiled) {
+  if (this.pending == 0) {
     fn(this);
   } else {
     this.callbacks.unshift(fn);
@@ -37,12 +36,16 @@ Tree.prototype.executeCallbacks = function() {
   for (var i = 0, callback; callback = this.callbacks[i]; ++i) {
     callback(this);
   }
+  this.callbacks = [];
 };
+
+Tree.prototype.countup = function() {
+  this.pending += 1;
+}
 
 Tree.prototype.countdown = function() {
   this.pending -= 1;
   if (this.pending == 0) {
-    this.compiled = true;
     this.executeCallbacks();
   }
 };
@@ -129,7 +132,7 @@ Tree.prototype.addScopeNode = function(node) {
 Tree.prototype.extend = function(name, templates) {
   name = utils.trim(name);
   this.pending += 1;
-  templates.getTemplate(name, utils.bind(this, function(template) {
+  templates.getTemplate(name, false, utils.bind(this, function(template) {
     this.extendTemplate(template);
     this.countdown();
   }));
@@ -239,15 +242,20 @@ function Templates(directory) {
  * Gets a specified template by assigning a callback to that template
  * for whenever the given template has successfully compiled.
  */
-Templates.prototype.getTemplate = function(name, callback) {
-  if (this.templates[name]) {
-    this.templates[name].addCallback(callback);
+Templates.prototype.getTemplate = function(name, pending, callback) {
+  var stub = this.templates[name];
+  if (stub) {
+    if (pending) {
+      stub.countup();
+    }
+    stub.addCallback(callback);
   } else {
-    var tree = new Tree(name);
-    this.templates[name] = tree;
-    tree.addCallback(callback);
-    this.loadTemplate(name, tree);
+    stub = new Tree(name, pending);
+    this.templates[name] = stub;
+    stub.addCallback(callback);
+    this.loadTemplate(name, stub);
   }
+  return stub;
 };
 
 /**
@@ -335,7 +343,19 @@ Templates.prototype.handleKeyword = function(tree, keyword) {
  * the given callback with the rendered response.
  */
 Templates.prototype.render = function(name, vars, callback) {
-  this.getTemplate(name, utils.bind(this, function(template) {
+  this.getTemplate(name, false, utils.bind(this, function(template) {
+    callback(this.renderTemplate(template, vars));
+  }));
+};
+
+/**
+ * Gets a render handle on the template with an additional pending
+ * count, so that other asynchronous operations can complete before
+ * render time. Also returns a stub of the template so that countdown
+ * operations can be performed as the asynchronous operations complete.
+ */
+Templates.prototype.renderPending = function(name, vars, callback) {
+  return this.getTemplate(name, true, utils.bind(this, function(template) {
     callback(this.renderTemplate(template, vars));
   }));
 };
