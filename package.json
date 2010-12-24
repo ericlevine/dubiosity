@@ -1,0 +1,6 @@
+{ "name" : "dubiosity"
+, "version" : "0.1.0"
+, "description" : "A lightweight, Django-like, node.js templating system."
+, "main" : "./templates"
+, "engines": [ "node" ]
+}
